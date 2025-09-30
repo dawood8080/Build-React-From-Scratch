@@ -160,3 +160,185 @@ function unmountComponent(component) {
 function performUpdateIfNecessary(component) {
   component.performUpdateIfNecessary();
 };
+
+
+// --------------------------------- Internal Component Lifecycle ---------------------------------
+
+// Constructor -> mountComponent -> receiveComponent -> updateComponent -> unmountComponent
+
+// --------------------------------- Component --------------------------------------------
+
+class Component {
+  constructor(props) {
+    // Set up some fields for later user.
+    this.props = props;
+    this._currentElement = null;
+    this._pendingState = null;
+    this._renderedComponent = null;
+    this._renderedNode = null;
+
+    assert(typeof this.render === 'function');
+  }
+
+  setState(partialState) {
+    // React uses a queue here to allow for batching.
+    this._pendingState = Object.assign({}, this._pendingState, partialState);
+    Reconciler.performUpdateIfNecessary(this);
+  };
+
+  // WE have a helper method here to avoid having
+  // a wrapper instance. React does that - it's a
+  // smarter implementation and hides required
+  // helpers, internal data. That also allows
+  // renderers to have their own implementation
+  // specific wrappers. This ensures that
+  // React.Component is available on Native.
+  _construct(element) {
+    this._currentElement = element;
+  };
+
+  mountComponent() {
+    // This is where the magic starts to happen.
+    // We call the render method to get our actual
+    // rendered element. Note: since React
+    // don't support Arrays or other types, we can
+    // safely assume we have an element.
+    let renderedElement = this.render();
+
+    // TODO: call componentWillMount
+
+    // Actually instantiate the rendered element.
+    let component = instantiateComponent(renderedElement);
+
+    this._renderedComponent = component;
+
+    // Generate markup for component & recurse!
+    // Since Composite Components instances don't
+    // have a DOM representation of their own,
+    // this markup will actually be the DOM nodes
+    // (or Native views)
+    let renderedNode = Reconciler.mountComponent(component, node);
+
+    return renderedNode;
+  };
+
+  receiveComponent(nextElement) {
+    this.updateComponent(nextElement);
+  }
+
+  updateComponent(nextElement) {
+    let prevElement = this._currentElement;
+
+    // When just updating state, nextElement
+    // will be the same as the previously rendered
+    // element. Otherwise, this update is the
+    // result of a parent re-rendering.
+    if (prevElement !== nextElement) {
+      // TODO: call componentWillReceiveProps
+    };
+
+    // TODO: call shouldComponentUpdate & return if false
+
+    // TODO: call componentWillUpdate
+
+    // Update instance data
+    this._currentElement = nextElement;
+    this.props = nextElement.props;
+    if (this._pendingState) {
+      this.state = this._pendingState;
+    }
+    this._pendingState = null;
+
+    // We need to previously rendered element
+    // (render() result) to compare to the next
+    // render() result.
+    let prevRenderedElement = this._renderedComponent._currentElement;
+    let nextRenderedElement = this.render();
+
+    // Just like a top-level update, determine if
+    // we should update or replace.
+    let shouldUpdate = shouldUpdateComponent(prevRenderedElement, nextRenderedElement);
+    if (shouldUpdate) {
+      // Send the new element to the instance.
+      Reconciler.receiveComponent(
+        this._renderedComponent,
+        nextRenderedElement,
+      );
+    } else {
+      // Unmount the current component and
+      // instantiate the new one, replace the
+      // content in the DOM.
+      Reconciler.unmountComponent(this._renderedComponent);
+      let nextRenderedComponent = instantiateComponent(nextRenderedElement);
+      let nextMarkup = Reconciler.mountComponent(nextRenderedComponent);
+      DOM.replaceNode(this._renderedNode, nextMarkup);
+      this._renderedComponent = nextRenderedComponent;
+    }
+  }
+
+  performUpdateIfNecessary() {};
+}
+
+// --------------------------------- DOMComponentWrapper --------------------------------------------
+
+class DOMComponentWrapper extends MultiChild {
+  constructor(element) {
+    super();
+    this._currentElement = element;
+    this._domNode = null;
+  }
+
+  mountComponent() {
+    // Create the DOM element, set attributes,
+    // Recurse for children.
+    let el = document.createElement(this._currentElement.type);
+    this._domNode = el;
+    this._updateInitialDOMProperties(
+      {},
+      this._currentElement.props
+    );
+    this._createInitialDOMChildren(this._currentElement.props);
+
+    return el;
+  };
+
+  unmountComponent() {
+    // React needs to do some special handling for
+    // some node types, specifically
+    // removing event handlers that had to be
+    // attached to this node and couldn't
+    // be handled through propagation.
+    this.unmountChildren();
+  };
+
+  receiveComponent(nextElement) {
+    this.updateComponent(this._currentElement, nextElement);
+  };
+
+  updateComponent(prevElement, nextElement) {
+    this._currentElement = nextElement;
+    this._updateDOMProperties(prevElement.props, nextElement.props);
+    this._updateDOMChildren(prevElement.props, nextElement.props);
+  };
+
+  _createInitialDOMChildren(props) {
+    let childType = typeof props.children;
+
+    // We'll take a short cut for text content.
+    if(childType === 'string' || childType === 'number') {
+      this._domNode.textContent = props.children;
+    }
+    // Single element or Array
+     else if(props.children) {
+      let mountImages = this.mountChildren(props.children);
+
+      DOM.appendChildren(this._domNode, mountImages);
+    }
+  };
+
+  _updateDOMChildren(prevProps, nextProps) {
+    // React does a bunch of work to handle
+    // array updates, reordering, etc.
+  };
+}
+
